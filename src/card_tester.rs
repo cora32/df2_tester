@@ -1,55 +1,66 @@
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
-#[macro_use]
-extern crate serde_json;
 extern crate reqwest;
+#[macro_use]
 use crate::base_tester::get_creds;
 use crate::base_tester::TestError;
 use crate::base_tester::Tester;
-use crate::card_tester::GetCardsTest;
 use reqwest::Client;
-use std::env;
-#[allow(unused_imports)]
-use uuid::Uuid;
-
-mod base_tester;
-mod card_tester;
-
-#[allow(dead_code)]
-pub const REGISTER_URL: &str = "/register";
-pub const GET_CARDS_URL: &str = "/df2/cards";
-
-// Register tester impl
 
 #[derive(Deserialize, Debug)]
-struct RegisterResponse {
-    secret: String,
+struct GetCardsResponse {
+    #[serde(rename = "scaleId")]
+    scale_id: String,
+    #[serde(rename = "clusterName")]
+    cluster_name: String,
+    #[serde(rename = "contentId")]
+    content_id: String,
+    #[serde(rename = "imageUrl")]
+    image_url: String,
+    description: String,
 }
 
-struct RegisterTest {
+pub struct GetCardsTest {
     url: String,
 }
 
-impl RegisterTest {
-    const BUILD_TYPE: &'static str = "tester";
-    // 10203d05285ad29de94d5c705cb8872d
-    const UUID: &'static str = "00000000-0000-0000-0000-000000000002";
-    const VERSION: &'static str = "0";
+impl GetCardsTest {
+    const VERSION: &'static str = "7110";
+
+    fn check_image(&self, image_url: &str) -> Result<String, TestError> {
+        let response = match Client::new().get(image_url).send() {
+            Ok(resp) => resp,
+            Err(e) => {
+                return Err(TestError {
+                    url: image_url.to_owned(),
+                    request: " ".to_owned(),
+                    error: format!("Failed to get image: {:?}", e).to_owned(),
+                })
+            }
+        };
+
+        if response.status().is_success() {
+            println!("==> {} [OK]", image_url);
+            return Ok(" ".to_owned());
+        } else {
+            return Err(TestError {
+                url: image_url.to_owned(),
+                request: " ".to_owned(),
+                error: format!("Failed to get image: {:?}", image_url).to_owned(),
+            });
+        }
+    }
 }
 
-impl Tester for RegisterTest {
-    fn new(url: String) -> RegisterTest {
-        RegisterTest { url }
+impl Tester for GetCardsTest {
+    fn new(url: String) -> GetCardsTest {
+        GetCardsTest { url }
     }
 
     fn test(&self, uuid: String) -> Result<String, TestError> {
         let creds = get_creds();
 
         let body = json!({
-            "buildType": RegisterTest::BUILD_TYPE,
             "uuid": uuid,
-            "version": RegisterTest::VERSION
+            "version": GetCardsTest::VERSION
         });
 
         println!("==> {}\n {}", self.url, body);
@@ -70,7 +81,7 @@ impl Tester for RegisterTest {
         };
 
         if response.status().is_success() {
-            let resp: RegisterResponse = match response.json() {
+            let card_list: Vec<GetCardsResponse> = match response.json() {
                 Ok(json) => json,
                 Err(e) => {
                     return Err(TestError {
@@ -85,9 +96,23 @@ impl Tester for RegisterTest {
                     })
                 }
             };
-            println!("<== {:?}", resp);
 
-            Ok(resp.secret)
+            for card in card_list {
+                df2_check_params!(
+                    "clusterName"; card.cluster_name.trim(),
+                    "scaleId"; card.scale_id.trim(),
+                    "description"; card.description.trim(),
+                    "contentId"; card.content_id.trim(),
+                    "imageUrl"; card.image_url.trim()
+                );
+
+                match self.check_image(card.image_url.trim()) {
+                    Ok(_) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+
+            return Ok(uuid);
         } else if response.status().is_server_error() {
             return Err(TestError {
                 url: self.url.clone(),
@@ -102,34 +127,4 @@ impl Tester for RegisterTest {
             });
         }
     }
-}
-
-///
-
-fn main() {
-    let base_url = env::var("DF2_BASE_URL").expect("DF2_BASE_URL not found");
-    // let register_test: RegisterTest = Tester::new(format!("{}/{}", base_url, REGISTER_URL));
-    let get_cards_test: GetCardsTest = Tester::new(format!("{}/{}", base_url, GET_CARDS_URL));
-
-    // let uuid = Uuid::new_v4();
-    let uuid = RegisterTest::UUID;
-
-    // match register_test.test(uuid.to_string().to_owned()) {
-    //     Ok(_secret) => {
-    //         register_test.say_ok(REGISTER_URL);
-
-    //         match get_cards_test.test(uuid.to_string().to_owned()) {
-    //             Ok(_result) => get_cards_test.say_ok(GET_CARDS_URL),
-    //             Err(e) => get_cards_test.say_failed(e),
-    //         }
-    //     }
-    //     Err(e) => {
-    //         register_test.say_failed(e);
-    //     }
-    // };
-
-    match get_cards_test.test(uuid.to_string().to_owned()) {
-        Ok(_result) => get_cards_test.say_ok(GET_CARDS_URL),
-        Err(e) => get_cards_test.say_failed(e),
-    };
 }
